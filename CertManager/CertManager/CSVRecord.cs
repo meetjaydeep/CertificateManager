@@ -9,7 +9,8 @@ namespace CertManager
             var lista = line.Split(delimeter);
             for (int i = 0; i < lista.Length; i++)
             {
-                Add(keys[i], lista[i]);
+                if(!string.IsNullOrWhiteSpace(lista[i]))
+                    Add(keys[i], lista[i]);
             }
         }
     }
