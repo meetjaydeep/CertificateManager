@@ -5,16 +5,9 @@ namespace CertManager
 {
     public class CSVTable
     {
-        public CSVTable(string table, char delimeter, bool allValuesRequired)
-            : this(table.Split(new string[] { Environment.NewLine }, StringSplitOptions.None), delimeter, allValuesRequired)
-        {
-            
-        }
-
         public CSVTable(string[] lines, char delimeter, bool allValuesRequired)
         {
             Columns = lines[0].Split(delimeter);
-
 
             if (allValuesRequired)
             {
@@ -38,7 +31,7 @@ namespace CertManager
             {
                 Records = lines.ToList().GetRange(1, lines.Length - 1)
                     .Where(line => !string.IsNullOrWhiteSpace(line) && !delimeter.ToString().Equals(line))
-                    .Select(line => new CSVRecord(line, Columns, delimeter)).ToList();
+                    .Select(line =>  new CSVRecord(line, Columns, delimeter)).ToList();
             }
         }
 
@@ -49,5 +42,7 @@ namespace CertManager
         {
             get { return Records[index]; }
         }
+
+       
     }
 }

@@ -1,4 +1,5 @@
 ﻿
+using log4net;
 using Spire.Presentation;
 using System;
 using System.Collections.Generic;
@@ -7,14 +8,17 @@ using System.Configuration;
 using System.IO;
 using System.Net;
 using System.Net.Mail;
+using System.Text;
 
 namespace CertManager
 {
-    class Manager
+    internal class Manager
     {
+        private static ILog logger = LogManager.GetLogger("CertManager");
+
         private const string FileExtension = ".pdf";
 
-        private Dictionary<string, string> appSettings;
+        private readonly Dictionary<string, string> appSettings;
         private readonly string uniqueKey;
         private string emailBodyTemplate;
         public Manager()
@@ -29,7 +33,7 @@ namespace CertManager
 
             HashSet<string> excludeUsers = new HashSet<string>();
 
-            foreach (String line in File.ReadAllLines(filePath))
+            foreach (string line in File.ReadAllLines(filePath))
             {
                 string[] cells = line.Split(',');
                 if (cells.Length != 0 && !string.IsNullOrWhiteSpace(cells[0]) && !excludeUsers.Contains(cells[0].Trim()))
@@ -39,13 +43,40 @@ namespace CertManager
             return excludeUsers;
         }
 
+        private string[] ReadAllLines(string path, bool excludeUnicodeText)
+        {
+            if (excludeUnicodeText)
+            {
+                List<string> excludedLines = new List<string>();
+                List<string> includedLines = new List<string>();
+
+                foreach (string line in File.ReadAllLines(path))
+                {
+                    if (IsUnicode(line))
+                    {
+                        excludedLines.Add(line);
+                        continue;
+                    }
+
+                    includedLines.Add(line);
+                }
+
+                logger.Info("Excluded lines containing Unicode characters");
+                logger.Info(string.Join(Environment.NewLine, excludedLines));
+
+                return includedLines.ToArray();
+            }
+
+            return File.ReadAllLines(path);
+        }
+
         public void Execute()
         {
-            CSVTable allUsers = new CSVTable(File.ReadAllText(appSettings["UserList"]), appSettings["Delimeter"].ToCharArray()[0], Convert.ToBoolean(appSettings["AllValuesRequired"]));
+            CSVTable allUsers = new CSVTable(ReadAllLines(appSettings["UserList"], Convert.ToBoolean(appSettings["ExcludeUnicodeText"])), appSettings["Delimeter"].ToCharArray()[0], Convert.ToBoolean(appSettings["AllValuesRequired"]));
 
             CSVTable tempUsers = allUsers;
 
-            var excludeUsers = getExcludeUsers();
+            HashSet<string> excludeUsers = getExcludeUsers();
 
             List<CSVRecord> removeUsers = new List<CSVRecord>();
 
@@ -57,20 +88,24 @@ namespace CertManager
             //    }
             //}
 
-            int removedCount= allUsers.Records.RemoveAll(u => excludeUsers.Contains(u[uniqueKey]));
+            int removedCount = allUsers.Records.RemoveAll(u => excludeUsers.Contains(u[uniqueKey]));
 
-            Console.WriteLine("Removed users:"+removedCount);
+            logger.Info("Removed users count: " + removedCount);
             if (Convert.ToBoolean(appSettings["GenerateCertificate"]))
             {
-                Console.WriteLine("Generate Certificates");
+                logger.Info("Generate certificate started");
                 GenerateCertificates(allUsers);
+                logger.Info("Generate certificate completed");
+
             }
 
             if (Convert.ToBoolean(appSettings["SendEmail"]))
             {
-                Console.WriteLine("Sending Emails");
+                logger.Info("Sending Emails started");
                 emailBodyTemplate = File.ReadAllText(appSettings["EmailBodyFileName"]);
                 SendEmail(allUsers);
+                logger.Info("Sending Emails completed");
+
             }
         }
 
@@ -85,17 +120,17 @@ namespace CertManager
 
             foreach (CSVRecord user in users.Records)
             {
-                Console.WriteLine($"Loading file:{filePath}");
+                logger.Info($"Loading file:{filePath}");
 
                 presentation.LoadFromFile(filePath);
-                Console.WriteLine("File loaded");
+                logger.Info("File loaded");
 
                 FindAndReplaceTags(presentation.Slides[0], user);
 
                 //save and launch the result file
                 string outputFile = Path.Combine(outputFolder, user[uniqueKey] + FileExtension);
                 presentation.SaveToFile(outputFile, FileFormat.PDF);
-                Console.WriteLine($"File saved: {outputFile}");
+                logger.Info($"File saved: {outputFile}");
             }
         }
 
@@ -123,6 +158,32 @@ namespace CertManager
                 }
             }
         }
+        public static bool IsUnicode(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) { return true; }
+            return System.Text.ASCIIEncoding.GetEncoding(0).GetString(System.Text.ASCIIEncoding.GetEncoding(0).GetBytes(text)) != text;
+        }
+
+        private static string EncodeNonAsciiCharacters(string value)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in value)
+            {
+                if (c > 127)
+                {
+                    // This character is too big for ASCII
+                    string encodedValue = "\\u" + ((int)c).ToString("x4");
+                    sb.Append(encodedValue);
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            return sb.ToString();
+        }
+
+
 
         /// <summary>
         /// Get config section from the app config file
@@ -134,7 +195,7 @@ namespace CertManager
             NameValueCollection applicationSettings = ConfigurationManager.GetSection(sectionName) as NameValueCollection;
             if (applicationSettings.Count == 0)
             {
-                Console.WriteLine("Application Settings are not defined");
+                logger.Info("Application Settings are not defined");
             }
             else
             {
@@ -143,7 +204,7 @@ namespace CertManager
                 foreach (string key in applicationSettings.AllKeys)
                 {
                     dictionary.Add(key, applicationSettings[key]);
-                    //Console.WriteLine(key + " = " + applicationSettings[key]);
+                    //logger.Info(key + " = " + applicationSettings[key]);
                 }
 
                 return dictionary;
@@ -157,7 +218,7 @@ namespace CertManager
         /// </summary>
         /// <param name="users">User list</param>
         /// <returns>Dictionary containing messages</returns>
-        Dictionary<string, string> GetMessages(CSVTable users)
+        private Dictionary<string, string> GetMessages(CSVTable users)
         {
             Dictionary<string, string> messages = new Dictionary<string, string>(users.Records.Count);
 
@@ -174,7 +235,7 @@ namespace CertManager
         /// </summary>
         /// <param name="tags">User info from the csv file</param>
         /// <returns>User specific message</returns>
-        string PrepareEmailBody(Dictionary<string, string> tags)
+        private string PrepareEmailBody(Dictionary<string, string> tags)
         {
             string message = emailBodyTemplate;
             foreach (KeyValuePair<string, string> keyValue in tags)
@@ -190,7 +251,7 @@ namespace CertManager
         /// </summary>
         /// <param name="users">Users list</param>
         /// <param name="appSettings">App settings</param>
-        void SendEmail(CSVTable users)
+        private void SendEmail(CSVTable users)
         {
             Dictionary<string, string> messages = GetMessages(users);
             string attachmentFolder = appSettings["OutputFolder"];
@@ -226,9 +287,8 @@ namespace CertManager
                     {
                         smtp.Credentials = new NetworkCredential(appSettings["EmailFrom"], appSettings["EmailPassword"]);
                         smtp.EnableSsl = Convert.ToBoolean(appSettings["EmailEnableSSL"]);
-                        Console.WriteLine($"Sending Email to {user["Email"]}");
+                        logger.Info($"Sending Email to {user["Email"]}");
                         smtp.Send(mail);
-                        Console.WriteLine($"Sent Email to {user["Email"]}");
                     }
                 }
             }
